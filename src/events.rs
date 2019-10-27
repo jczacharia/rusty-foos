@@ -10,7 +10,7 @@ pub struct Config {
     red_goal_pin: u8,
     ball_drop_1_pin: u8,
     ball_drop_2_pin: u8,
-    port: u32,
+    pub port: u32,
 }
 
 pub struct FoosInputPins {
@@ -21,11 +21,15 @@ pub struct FoosInputPins {
 }
 
 impl FoosInputPins {
-    pub fn new(config: Config) -> Result<FoosInputPins, Box<dyn std::error::Error>> {
-        let blue_goal = Gpio::new()?.get(config.blue_goal_pin)?.into_input();
-        let red_goal = Gpio::new()?.get(config.red_goal_pin)?.into_input();
-        let ball_drop_1 = Gpio::new()?.get(config.ball_drop_1_pin)?.into_input();
-        let ball_drop_2 = Gpio::new()?.get(config.ball_drop_2_pin)?.into_input();
+    pub fn new(config: &Config) -> Result<FoosInputPins, Box<dyn std::error::Error>> {
+        let blue_goal = Gpio::new()?.get(config.blue_goal_pin)?.into_input_pullup();
+        let red_goal = Gpio::new()?.get(config.red_goal_pin)?.into_input_pullup();
+        let ball_drop_1 = Gpio::new()?
+            .get(config.ball_drop_1_pin)?
+            .into_input_pullup();
+        let ball_drop_2 = Gpio::new()?
+            .get(config.ball_drop_2_pin)?
+            .into_input_pullup();
 
         Ok(FoosInputPins {
             blue_goal,

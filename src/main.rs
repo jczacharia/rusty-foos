@@ -3,9 +3,11 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::sync::{Arc, Mutex};
+use ws::{Builder, Message, Sender};
 
 mod events;
 mod game_state;
+
 use events::{Config, FoosInputPins};
 use game_state::GameState;
 
@@ -13,68 +15,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = init()?;
 
     // Init Raspberry Pi pins
-    let mut inputs = FoosInputPins::new(config)?;
+    let mut inputs = FoosInputPins::new(&config)?;
 
-    // Init thread-safe gamestate;
+    // Init thread-safe gamestate
     let game_state: Arc<Mutex<GameState>> = Arc::new(Mutex::new(GameState::new()));
-
-    // Previous game state used to debounce inputs
-    let mut prev_game_state = GameState::new();
 
     // Init Raspberry Pi interrupts from config pins
     inputs.init_interrupts(&game_state)?;
 
-    // Main game loop
-    let timer_game_state: Arc<Mutex<GameState>> = Arc::clone(&game_state);
-    let game_timer = std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+    let socket = Builder::new()
+        .build(move |_| {
+            // Dummy message handler
+            move |_| {
+                println!("Message handler called.");
+                Ok(())
+            }
+        })
+        .unwrap();
 
-        let mut ref_game_state = timer_game_state.lock().unwrap();
-        if (*ref_game_state).ball_dropped == true {
-            (*ref_game_state).reset();
-        }
+    let handle = socket.broadcaster();
 
-        (*ref_game_state).time += 1;
-
-        debounce_inputs(&mut ref_game_state, &mut prev_game_state);
-
-        println!("Timer: {:?}", ref_game_state);
+    // Start listening on another thread
+    std::thread::spawn(move || {
+        socket.listen("192.168.1.152:3000").unwrap();
     });
 
-    // Basically a forever loop since game_timer thread won't end
-    game_timer.join().unwrap();
+    // Start main game loop
+    game_loop(&handle, &game_state).join().unwrap();
 
     Ok(())
 }
 
-fn debounce_inputs(game_state: &mut GameState, prev_game_state: &mut GameState) {
-    if game_state.red_goals > prev_game_state.red_goals {
-        game_state.red_goals = prev_game_state.red_goals + 1;
-        prev_game_state.red_goals = game_state.red_goals;
+fn game_loop(
+    handler: &Sender,
+    arc_game_state: &Arc<Mutex<GameState>>,
+) -> std::thread::JoinHandle<()> {
+    let mut prev_game_state = GameState::new();
+    let timer_game_state: Arc<Mutex<GameState>> = Arc::clone(arc_game_state);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let mut game_state = timer_game_state.lock().unwrap();
+
+        (*game_state).time += 1;
+
+        // Debounce
+        if game_state.red_goals > prev_game_state.red_goals {
+            game_state.red_goals = prev_game_state.red_goals + 1;
+            prev_game_state.red_goals = game_state.red_goals;
+        }
+        if game_state.blue_goals > prev_game_state.blue_goals {
+            game_state.blue_goals = prev_game_state.blue_goals + 1;
+            prev_game_state.blue_goals = game_state.blue_goals;
+        }
+
+        let json = serde_json::json!((*game_state));
+
+        let msg = Message::text(json.to_string());
+
+        handler.send(msg).unwrap();
+
+        println!("Timer: {:?}", game_state);
     }
-
-    if game_state.blue_goals > prev_game_state.blue_goals {
-        game_state.blue_goals = prev_game_state.blue_goals + 1;
-        prev_game_state.blue_goals = game_state.blue_goals;
-    }
-}
-
-fn parse_config_file(filepath: &str) -> String {
-    let file = File::open(filepath).expect("could not open file");
-    let mut buffered_reader = BufReader::new(file);
-    let mut contents = String::new();
-    let _number_of_bytes: usize = match buffered_reader.read_to_string(&mut contents) {
-        Ok(number_of_bytes) => number_of_bytes,
-        Err(_err) => 0,
-    };
-
-    contents
 }
 
 fn init() -> Result<Config, Box<dyn std::error::Error>> {
-    let matches = App::new("Hackathon Foosball | IQ Inc. ")
+    let matches = App::new("Rusty Foosball")
         .version("0.1.0")
-        .author("Jeremy C. Zacharia <jzachariaiq-inc.com>")
+        .author("Jeremy C. Zacharia <jczacharia@gmail.com>")
         .about("Automated Foosball game server")
         .arg(
             Arg::with_name("config")
@@ -92,4 +99,16 @@ fn init() -> Result<Config, Box<dyn std::error::Error>> {
     let config: Config = serde_json::from_str(&config_string)?;
 
     Ok(config)
+}
+
+fn parse_config_file(filepath: &str) -> String {
+    let file = File::open(filepath).expect("could not open file");
+    let mut buffered_reader = BufReader::new(file);
+    let mut contents = String::new();
+    let _number_of_bytes: usize = match buffered_reader.read_to_string(&mut contents) {
+        Ok(number_of_bytes) => number_of_bytes,
+        Err(_err) => 0,
+    };
+
+    contents
 }

@@ -1,4 +1,6 @@
-#[derive(Debug, Copy, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct GameState {
     pub time: u64,
     pub blue_goals: u32,
@@ -14,12 +16,5 @@ impl GameState {
             red_goals: 0,
             ball_dropped: false,
         }
-    }
-
-    pub fn reset(&mut self) {
-        self.time = 0;
-        self.blue_goals = 0;
-        self.red_goals = 0;
-        self.ball_dropped = false;
     }
 }

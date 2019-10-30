@@ -1,15 +1,28 @@
 use clap::{App, Arg};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::sync::{Arc, Mutex};
-use ws::{Builder, Message, Sender};
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
 
 mod events;
-mod game_state;
+mod game;
 
-use events::{Config, FoosInputPins};
-use game_state::GameState;
+use events::FoosInputPins;
+use game::{FoosEvent, FoosStateMachine};
+
+/// Foosball Game Configuration
+#[derive(Serialize, Deserialize)]
+pub struct Config {
+    blue_goal_pin: u8,
+    red_goal_pin: u8,
+    ball_drop_1_pin: u8,
+    ball_drop_2_pin: u8,
+    reset_pin: u8,
+    port: u32,
+    max_score: u32,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = init()?;
@@ -18,22 +31,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs = FoosInputPins::new(&config)?;
 
     // Init thread-safe gamestate
-    let game_state: Arc<Mutex<GameState>> = Arc::new(Mutex::new(GameState::new()));
+    let (tx, rx): (Sender<FoosEvent>, Receiver<FoosEvent>) = mpsc::channel();
 
     // Init Raspberry Pi interrupts from config pins
-    inputs.init_interrupts(&game_state)?;
+    inputs.init_interrupts(&tx)?;
 
-    let socket = Builder::new()
-        .build(move |_| {
-            // Dummy message handler
-            move |_| {
-                println!("Message handler called.");
-                Ok(())
-            }
-        })
-        .unwrap();
+    let socket = ws::Builder::new().build(move |_| {
+        // Dummy message handler
+        move |_| {
+            println!("Message handler called.");
+            Ok(())
+        }
+    })?;
 
-    let handle = socket.broadcaster();
+    // Used to send game data to all connected sockets
+    let all_sockets_broadcaster = socket.broadcaster();
 
     // Start listening on another thread
     std::thread::spawn(move || {
@@ -41,40 +53,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Start main game loop
-    game_loop(&handle, &game_state).join().unwrap();
-
-    Ok(())
-}
-
-fn game_loop(
-    handler: &Sender,
-    arc_game_state: &Arc<Mutex<GameState>>,
-) -> std::thread::JoinHandle<()> {
-    let mut prev_game_state = GameState::new();
-    let timer_game_state: Arc<Mutex<GameState>> = Arc::clone(arc_game_state);
+    let mut game = FoosStateMachine::new(config.max_score);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
-        let mut game_state = timer_game_state.lock().unwrap();
 
-        (*game_state).time += 1;
+        match rx.try_recv() {
+            Ok(e) => game.next(e),
+            _ => game.next(FoosEvent::NoEvent),
+        };
 
-        // Debounce
-        if game_state.red_goals > prev_game_state.red_goals {
-            game_state.red_goals = prev_game_state.red_goals + 1;
-            prev_game_state.red_goals = game_state.red_goals;
-        }
-        if game_state.blue_goals > prev_game_state.blue_goals {
-            game_state.blue_goals = prev_game_state.blue_goals + 1;
-            prev_game_state.blue_goals = game_state.blue_goals;
-        }
+        let gd = game.get_game_data();
 
-        let json = serde_json::json!((*game_state));
+        let json = serde_json::json!(game.get_game_data());
 
-        let msg = Message::text(json.to_string());
+        let msg = ws::Message::text(json.to_string());
 
-        handler.send(msg).unwrap();
+        all_sockets_broadcaster.send(msg).unwrap();
 
-        println!("Timer: {:?}", game_state);
+        println!("Timer: {:?}", gd);
     }
 }
 

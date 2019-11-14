@@ -13,13 +13,14 @@ use events::FoosInputPins;
 use game::{FoosEvent, FoosStateMachine};
 
 /// Foosball Game Configuration
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     blue_goal_pin: u8,
     red_goal_pin: u8,
     ball_drop_1_pin: u8,
     ball_drop_2_pin: u8,
     reset_pin: u8,
+    ip_addr: String,
     port: u32,
     max_score: u32,
 }
@@ -46,14 +47,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Used to send game data to all connected sockets
     let all_sockets_broadcaster = socket.broadcaster();
+    
+    // clone config
+    let cc = config.clone();
 
     // Start listening on another thread
     std::thread::spawn(move || {
-        socket.listen("192.168.1.152:3000").unwrap();
+        let ip_port = format!("{}:{}", config.ip_addr.clone(), &config.port);
+        socket.listen(ip_port).unwrap();
     });
 
     // Start main game loop
-    let mut game = FoosStateMachine::new(config.max_score);
+    let mut game = FoosStateMachine::new(cc.max_score);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
 

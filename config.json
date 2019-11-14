@@ -4,6 +4,7 @@
     "ball_drop_1_pin": 24,
     "ball_drop_2_pin": 25,
     "reset_pin": 26,
+    "ip_addr": "10.0.170.224",
     "port": 3000,
     "max_score": 6
 }
